@@ -1408,6 +1408,69 @@ function vlisten(){
   vrecog.start();
 }
 
+/* ---------- LLM 指令解析（DeepSeek，JSON 输出） ---------- */
+async function parseCommand(text){
+  const titles=(data.checkin||[]).map(x=>x.title).join("、")||"（空）";
+  const sys=`你是「猫咪生活报」打卡助手的指令解析器。当前打卡条目：${titles}。
+把用户的话解析为 JSON：{"action":"add|delete|complete|unknown","title":"..."}。
+规则：add=新增打卡，title 用用户说的新条目名；complete=完成打卡/打了卡，title 用清单里最匹配的条目标题原文；delete=删除，title 用清单里最匹配的条目标题原文；无法理解用 unknown。只输出 JSON，不要解释。`;
+  const res=await fetch(VOICE_CONFIG.baseURL,{ method:"POST",
+    headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+vkey() },
+    body:JSON.stringify({ model:VOICE_CONFIG.model, temperature:0,
+      response_format:{ type:"json_object" },
+      messages:[ {role:"system",content:sys}, {role:"user",content:text} ] }) });
+  if(res.status===401){ localStorage.removeItem(VOICE_CONFIG.keyStoreKey); throw new Error("Key 无效，已清除，请点麦克风重新设置"); }
+  if(!res.ok) throw new Error("API 错误 "+res.status);
+  const j=await res.json();
+  const content=((j.choices||[])[0]||{}).message?.content||"";
+  try{ return JSON.parse(content); }catch(e){ return {action:"unknown"}; }
+}
+
+/* ---------- 模糊匹配条目（包含匹配 → 编辑距离兜底） ---------- */
+function lev(a,b){
+  const m=a.length,n=b.length; const dp=Array.from({length:m+1},(_,i)=>[i,...Array(n).fill(0)]);
+  for(let j=0;j<=n;j++) dp[0][j]=j;
+  for(let i=1;i<=m;i++) for(let j=1;j<=n;j++)
+    dp[i][j]=Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+  return dp[m][n];
+}
+function fuzzyFind(title){
+  const items=data.checkin||[]; if(!items.length) return null;
+  const t=String(title||"").trim().toLowerCase(); if(!t) return null;
+  const hit=items.find(x=>x.title.trim().toLowerCase()===t)
+    || items.find(x=>x.title.toLowerCase().includes(t))
+    || items.find(x=>t.includes(x.title.trim().toLowerCase()));
+  if(hit) return hit;
+  let best=null,bestD=Infinity;
+  items.forEach(x=>{ const d=lev(t,x.title.trim().toLowerCase()); if(d<bestD){bestD=d;best=x;} });
+  return bestD<=Math.max(2,Math.floor(best.title.length/2)) ? best : null;
+}
+
+/* ---------- 命令执行器（add/complete 即时执行；delete 复用 confirmDelete 二次确认） ---------- */
+function execCommand(cmd){
+  if(!cmd||!cmd.action||cmd.action==="unknown"){ vtoast("没听清，请再说一次"); return; }
+  data.checkin=data.checkin||[];
+  if(cmd.action==="add"){
+    const title=String(cmd.title||"").trim();
+    if(!title){ vtoast("没听清要新增什么"); return; }
+    data.checkin.push({id:Date.now(),title,log:{}}); persist();
+    vtoast(`已新增打卡「${title}」`);
+  }else if(cmd.action==="complete"){
+    const x=fuzzyFind(cmd.title); if(!x){ vlistItems(); return; }
+    x.log=x.log||{}; const t=today();
+    if(x.log[t]){ vtoast(`「${x.title}」今天已打过卡`); return; }
+    x.log[t]=true; persist();
+    vtoast(`已为「${x.title}」盖上今日猫爪章`);
+  }else if(cmd.action==="delete"){
+    const x=fuzzyFind(cmd.title); if(!x){ vlistItems(); return; }
+    confirmDelete("checkin",x.id);   // 复用模板内置删除确认弹窗
+  }else vtoast("没听清，请再说一次");
+}
+function vlistItems(){
+  const names=(data.checkin||[]).map(x=>"「"+x.title+"」").join(" ");
+  vtoast("没找到对应条目，当前有："+(names||"（空）"),3600);
+}
+
 /* ---------- 悬浮麦克风按钮 ---------- */
 (function(){
   const b=document.createElement("button");
