@@ -1438,12 +1438,13 @@ function fuzzyFind(title){
   const items=data.checkin||[]; if(!items.length) return null;
   const t=String(title||"").trim().toLowerCase(); if(!t) return null;
   const hit=items.find(x=>x.title.trim().toLowerCase()===t)
-    || items.find(x=>x.title.toLowerCase().includes(t))
+    || items.find(x=>x.title.trim().toLowerCase().includes(t))
     || items.find(x=>t.includes(x.title.trim().toLowerCase()));
   if(hit) return hit;
   let best=null,bestD=Infinity;
   items.forEach(x=>{ const d=lev(t,x.title.trim().toLowerCase()); if(d<bestD){bestD=d;best=x;} });
-  return bestD<=Math.max(2,Math.floor(best.title.length/2)) ? best : null;
+  const L=best.title.trim().length;   // 阈值随标题/输入长度收紧，防短标题无确认误命中
+  return bestD<=Math.min(Math.max(1,Math.floor(L/3)),Math.max(1,Math.min(t.length,L)-1)) ? best : null;
 }
 
 /* ---------- 命令执行器（add/complete 即时执行；delete 复用 confirmDelete 二次确认） ---------- */

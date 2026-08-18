@@ -277,6 +277,8 @@ cd /workspace/cat-press-workbench && git add workbench-desktop.html && git -c us
 **Files:**
 - Modify: `/workspace/cat-press-workbench/workbench-desktop.html`（Task 3 插入的 `/* ---------- 悬浮麦克风按钮 ---------- */` 注释之前）
 
+> **质量审查修正（已并入）：** `fuzzyFind` 收紧编辑距离阈值（随标题/输入长度取 min），修复 2 字符标题被任意 2 字符输入误命中的问题；includes 与阈值统一 trim 口径。
+
 - [ ] **Step 1: 在悬浮麦克风按钮 IIFE 之前插入**
 
 找到（Task 3 插入的代码内）：
@@ -319,12 +321,13 @@ function fuzzyFind(title){
   const items=data.checkin||[]; if(!items.length) return null;
   const t=String(title||"").trim().toLowerCase(); if(!t) return null;
   const hit=items.find(x=>x.title.trim().toLowerCase()===t)
-    || items.find(x=>x.title.toLowerCase().includes(t))
+    || items.find(x=>x.title.trim().toLowerCase().includes(t))
     || items.find(x=>t.includes(x.title.trim().toLowerCase()));
   if(hit) return hit;
   let best=null,bestD=Infinity;
   items.forEach(x=>{ const d=lev(t,x.title.trim().toLowerCase()); if(d<bestD){bestD=d;best=x;} });
-  return bestD<=Math.max(2,Math.floor(best.title.length/2)) ? best : null;
+  const L=best.title.trim().length;   // 阈值随标题/输入长度收紧，防短标题无确认误命中
+  return bestD<=Math.min(Math.max(1,Math.floor(L/3)),Math.max(1,Math.min(t.length,L)-1)) ? best : null;
 }
 
 /* ---------- 命令执行器（add/complete 即时执行；delete 复用 confirmDelete 二次确认） ---------- */
@@ -407,6 +410,7 @@ python3 -m http.server 8321 --directory /workspace/cat-press-workbench
 | 5 | 「把遛弯删掉」 | toast 列出当前条目 |
 | 6 | 控制台执行 `localStorage.removeItem("cat-press-llm-key")` 后点麦克风 | 弹出 Key 设置窗 |
 | 7 | 控制台 | 全程无红色报错 |
+| 8 | 清单含 2 字符条目时说无关 2 字符词（如「吃饭完成了」且清单无此条目） | toast 列出当前条目，不误完成 |
 
 - [ ] **Step 3: 若全部通过，收尾提交**
 
