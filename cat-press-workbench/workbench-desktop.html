@@ -1364,6 +1364,7 @@ function vtoast(msg, ms=2600){
 function vkey(){ return localStorage.getItem(VOICE_CONFIG.keyStoreKey)||""; }
 function ensureKey(){ if(vkey()) return true; openKeyDialog(); return false; }
 function openKeyDialog(){
+  if(document.querySelector(".overlay")) return;   // 防重入：已有弹窗时不再叠加
   const overlay=document.createElement("div"); overlay.className="overlay";
   overlay.innerHTML=`<div class="modal" style="width:420px"><h3>设置大模型 Key</h3>
     <div class="sub">语音指令由 DeepSeek 解析。Key 只存在本机浏览器，仅发往官方接口。<br>没有 Key？到 platform.deepseek.com 注册，充值 1 元可用数月。</div>
@@ -1373,7 +1374,8 @@ function openKeyDialog(){
       <button class="btn ghost" id="vk-cancel">取消</button><button class="btn" id="vk-save">保存</button></div></div>`;
   document.body.appendChild(overlay);
   const close=()=>overlay.remove();
-  overlay.onclick=e=>{ if(e.target===overlay) close(); };
+  const bornAt=Date.now();
+  overlay.onclick=e=>{ if(e.target===overlay && Date.now()-bornAt>350) close(); };
   overlay.querySelector("#vk-cancel").onclick=close;
   overlay.querySelector("#vk-save").onclick=()=>{
     const k=overlay.querySelector("#vk-input").value.trim();
@@ -1383,16 +1385,17 @@ function openKeyDialog(){
 }
 
 /* ---------- 语音识别（Chrome / Edge 免费内置） ---------- */
-let vrecog=null, vlistening=false;
+let vrecog=null, vlistening=false, vstarting=false;
 function vlisten(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){ vtoast("当前浏览器不支持语音识别，请用 Chrome / Edge"); return; }
+  if(vstarting) return;                        // 启动中：忽略重复点击，防多实例并行
   if(vlistening){ vrecog&&vrecog.stop(); return; }
   vrecog=new SR(); vrecog.lang="zh-CN"; vrecog.interimResults=false; vrecog.maxAlternatives=1;
   const btn=document.querySelector("#vmic");
-  vrecog.onstart=()=>{ vlistening=true; btn.classList.add("on"); };
-  vrecog.onend=()=>{ vlistening=false; btn.classList.remove("on"); };
-  vrecog.onerror=e=>{ vlistening=false; btn.classList.remove("on");
+  vrecog.onstart=()=>{ vstarting=false; vlistening=true; btn.classList.add("on"); };
+  vrecog.onend=()=>{ vstarting=false; vlistening=false; btn.classList.remove("on"); };
+  vrecog.onerror=e=>{ vstarting=false; vlistening=false; btn.classList.remove("on");
     if(e.error==="not-allowed") vtoast("麦克风权限被拒绝，请在地址栏允许后重试",3600);
     else if(e.error!=="aborted") vtoast("语音识别出错："+e.error); };
   vrecog.onresult=async ev=>{
@@ -1401,6 +1404,7 @@ function vlisten(){
     try{ execCommand(await parseCommand(text)); }
     catch(err){ vtoast("网络或 Key 有问题："+err.message,3600); }
   };
+  vstarting=true;
   vrecog.start();
 }
 
