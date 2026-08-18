@@ -1348,6 +1348,70 @@ function attr(s){ return esc(s).replace(/"/g,'&quot;'); }
 
 buildNav();
 render();
+
+/* ============================================================
+   VOICE — 语音打卡助手（新增代码块，独立闭环）
+   链路：麦克风按钮 → 语音识别 → parseCommand(在下方定义) → execCommand(在下方定义)
+   ============================================================ */
+function vtoast(msg, ms=2600){
+  const el=document.createElement("div"); el.className="vtoast"; el.textContent=msg;
+  document.body.appendChild(el);
+  requestAnimationFrame(()=>el.classList.add("show"));
+  setTimeout(()=>{ el.classList.remove("show"); setTimeout(()=>el.remove(),300); }, ms);
+}
+
+/* ---------- API Key 管理（localStorage，仅发往 provider 官方接口） ---------- */
+function vkey(){ return localStorage.getItem(VOICE_CONFIG.keyStoreKey)||""; }
+function ensureKey(){ if(vkey()) return true; openKeyDialog(); return false; }
+function openKeyDialog(){
+  const overlay=document.createElement("div"); overlay.className="overlay";
+  overlay.innerHTML=`<div class="modal" style="width:420px"><h3>设置大模型 Key</h3>
+    <div class="sub">语音指令由 DeepSeek 解析。Key 只存在本机浏览器，仅发往官方接口。<br>没有 Key？到 platform.deepseek.com 注册，充值 1 元可用数月。</div>
+    <input id="vk-input" type="password" placeholder="sk-..." autocomplete="off"
+      style="width:100%;padding:10px 12px;border:1px solid var(--border-input);border-radius:var(--radius-tile);background:var(--surface-nested);color:var(--text);font-size:14px"/>
+    <div class="modal-actions"><div class="spacer"></div>
+      <button class="btn ghost" id="vk-cancel">取消</button><button class="btn" id="vk-save">保存</button></div></div>`;
+  document.body.appendChild(overlay);
+  const close=()=>overlay.remove();
+  overlay.onclick=e=>{ if(e.target===overlay) close(); };
+  overlay.querySelector("#vk-cancel").onclick=close;
+  overlay.querySelector("#vk-save").onclick=()=>{
+    const k=overlay.querySelector("#vk-input").value.trim();
+    if(!k){ vtoast("Key 不能为空"); return; }
+    localStorage.setItem(VOICE_CONFIG.keyStoreKey,k); close(); vtoast("Key 已保存，点麦克风开始说话");
+  };
+}
+
+/* ---------- 语音识别（Chrome / Edge 免费内置） ---------- */
+let vrecog=null, vlistening=false;
+function vlisten(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){ vtoast("当前浏览器不支持语音识别，请用 Chrome / Edge"); return; }
+  if(vlistening){ vrecog&&vrecog.stop(); return; }
+  vrecog=new SR(); vrecog.lang="zh-CN"; vrecog.interimResults=false; vrecog.maxAlternatives=1;
+  const btn=document.querySelector("#vmic");
+  vrecog.onstart=()=>{ vlistening=true; btn.classList.add("on"); };
+  vrecog.onend=()=>{ vlistening=false; btn.classList.remove("on"); };
+  vrecog.onerror=e=>{ vlistening=false; btn.classList.remove("on");
+    if(e.error==="not-allowed") vtoast("麦克风权限被拒绝，请在地址栏允许后重试",3600);
+    else if(e.error!=="aborted") vtoast("语音识别出错："+e.error); };
+  vrecog.onresult=async ev=>{
+    const text=ev.results[0][0].transcript.trim(); if(!text) return;
+    vtoast(`听到：「${text}」`,1800);
+    try{ execCommand(await parseCommand(text)); }
+    catch(err){ vtoast("网络或 Key 有问题："+err.message,3600); }
+  };
+  vrecog.start();
+}
+
+/* ---------- 悬浮麦克风按钮 ---------- */
+(function(){
+  const b=document.createElement("button");
+  b.id="vmic"; b.className="vmic"; b.title="语音打卡（猫咪日常）";
+  b.innerHTML=icon("mic",24);
+  b.onclick=()=>{ if(ensureKey()) vlisten(); };
+  document.body.appendChild(b);
+})();
 </script>
 </body>
 </html>
