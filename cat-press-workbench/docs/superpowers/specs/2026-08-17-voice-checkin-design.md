@@ -48,7 +48,7 @@ const VOICE_CONFIG = {
 - 悬浮麦克风按钮：fixed 右下角，橘黄（`var(--module-3)`）圆形，使用 Lucide `mic` 图标（新增进 ICONS）
 - 录音中状态：墨绿（`var(--accent)`）脉冲描边动画
 - 设置弹窗：首次使用或无 Key 时弹出，输入 Key 存 localStorage；复用现有 modal 样式
-- 删除确认条：页面底部居中浮出确认条「确认删除『xxx』？ [确认] [取消]」（录音按钮上方，不遮挡列表）
+- 删除确认：**复用模板已内置的 `confirmDelete("checkin", id)` 弹窗**（规划阶段确认存在），零新增 UI
 - toast：模板未内置 toast，新增一个轻量 toast 函数（底部居中淡入淡出，复用 token 配色）
 
 ### 3.3 函数
