@@ -156,7 +156,7 @@ cd /workspace/cat-press-workbench && git add workbench-desktop.html && git -c us
 **Files:**
 - Modify: `/workspace/cat-press-workbench/workbench-desktop.html`（第 1324-1326 行，`buildNav(); render();` 之后、`</script>` 之前）
 
-> **质量审查修正（已并入）：** `vlisten` 增加 `vstarting` 启动态防多实例竞态；`openKeyDialog` 增加重入守卫与 350ms 点外关闭宽限防双击闪关。
+> **质量审查修正（已并入）：** `vlisten` 增加 `vstarting` 启动态防多实例竞态；`openKeyDialog` 增加重入守卫与 350ms 点外关闭宽限防双击闪关。终审补充：`start()` 加 try/catch 防 `vstarting` 卡死；`no-speech` 映射为「没听清」提示。
 
 - [ ] **Step 1: 插入脚本上半部分**
 
@@ -222,6 +222,7 @@ function vlisten(){
   vrecog.onend=()=>{ vstarting=false; vlistening=false; btn.classList.remove("on"); };
   vrecog.onerror=e=>{ vstarting=false; vlistening=false; btn.classList.remove("on");
     if(e.error==="not-allowed") vtoast("麦克风权限被拒绝，请在地址栏允许后重试",3600);
+    else if(e.error==="no-speech") vtoast("没听清，请再说一次");
     else if(e.error!=="aborted") vtoast("语音识别出错："+e.error); };
   vrecog.onresult=async ev=>{
     const text=ev.results[0][0].transcript.trim(); if(!text) return;
@@ -230,7 +231,8 @@ function vlisten(){
     catch(err){ vtoast("网络或 Key 有问题："+err.message,3600); }
   };
   vstarting=true;
-  vrecog.start();
+  try{ vrecog.start(); }
+  catch(e){ vstarting=false; vrecog=null; vtoast("麦克风启动失败，请重试"); }
 }
 
 /* ---------- 悬浮麦克风按钮 ---------- */

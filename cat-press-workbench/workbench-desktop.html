@@ -1397,6 +1397,7 @@ function vlisten(){
   vrecog.onend=()=>{ vstarting=false; vlistening=false; btn.classList.remove("on"); };
   vrecog.onerror=e=>{ vstarting=false; vlistening=false; btn.classList.remove("on");
     if(e.error==="not-allowed") vtoast("麦克风权限被拒绝，请在地址栏允许后重试",3600);
+    else if(e.error==="no-speech") vtoast("没听清，请再说一次");
     else if(e.error!=="aborted") vtoast("语音识别出错："+e.error); };
   vrecog.onresult=async ev=>{
     const text=ev.results[0][0].transcript.trim(); if(!text) return;
@@ -1405,7 +1406,8 @@ function vlisten(){
     catch(err){ vtoast("网络或 Key 有问题："+err.message,3600); }
   };
   vstarting=true;
-  vrecog.start();
+  try{ vrecog.start(); }
+  catch(e){ vstarting=false; vrecog=null; vtoast("麦克风启动失败，请重试"); }
 }
 
 /* ---------- LLM 指令解析（DeepSeek，JSON 输出） ---------- */
