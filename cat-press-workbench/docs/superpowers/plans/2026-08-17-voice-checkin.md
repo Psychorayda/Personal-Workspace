@@ -420,3 +420,23 @@ python3 -m http.server 8321 --directory /workspace/cat-press-workbench
 cd /workspace/cat-press-workbench && git status && git log --oneline -5
 ```
 Expected: 工作区干净（除 assets/docs 已有提交），共 4 个 feat 提交。
+
+---
+
+### Task 6（验收期追加）: 识别层整体替换——浏览器内置 Web Speech API → 讯飞语音听写 WebAPI
+
+**背景：** Task 5 验收中确认用户网络无法访问浏览器内置识别依赖的云端服务（Edge 走微软、Chrome 走谷歌），`Win+H` 系统听写同挂，Web Speech API 在该环境不可用。识别层整体替换为国内直连的讯飞 WebAPI；**DeepSeek 指令解析、模糊匹配、执行器、删除确认零改动**。
+
+**Files:**
+- Modify: `/workspace/cat-press-workbench/workbench-desktop.html`（VOICE_CONFIG 块、凭证管理、vlisten 全替换、按钮 onclick）
+
+**改动要点：**
+- [x] `VOICE_CONFIG` 增加 `asrStoreKey / asrHost / asrPath`；Key 弹窗升级为「语音服务设置」统一弹窗（讯飞 APPID/APIKey/APISecret + DeepSeek Key，localStorage 键 `cat-press-asr-cred`，回填已有值）
+- [x] 新增录音识别管线：`getUserMedia` → `AudioContext` + `ScriptProcessor`(4096) 采集 → 线性插值重采样 16k → Int16 PCM → HMAC-SHA256 签名（Web Crypto）→ WebSocket 流式上送（1280B/帧、40ms 节奏，首帧带 `common/business`）
+- [x] 结束方式三合一：服务端 VAD（vad_eos=2000，2 秒静默自动结束）、再点一次按钮手动结束、20 秒强制上限；结束后 5 秒未收最终帧则本地收尾
+- [x] 状态机 `vBusy/vRec/vDone` 防重入；`vCleanup` 统一释放麦克风/AudioContext/WebSocket；异常断开时用已收到的部分文本收尾
+- [x] 验证：`node --check` 通过；vb64/vResample/vToI16/vHmac 与 Node 原生实现比对一致
+
+**讯飞凭证获取（用户操作）：** console.xfyun.cn 注册 → 创建应用 → 开通「语音听写（流式版）」→ 复制 WebAPI 三件套。免费额度每日 500 次，个人日用足够。
+
+**手动验收补充：** 首次点击麦克风应弹出四格设置窗；填齐保存后再次点击开始录音（按钮变绿脉冲），说完 2 秒静默自动出「听到：…」，后续 DeepSeek 解析与执行器行为与 Task 5 验收表一致。

@@ -628,14 +628,18 @@ const CONFIG = {
 };
 
 /* ============================================================
-   VOICE_CONFIG — 语音打卡助手（猫咪日常 × 大模型指令解析）
-   换 provider 只需改 baseURL / model（如 Gemini 免费档）
+   VOICE_CONFIG — 语音打卡助手（猫咪日常 × 语音识别 × 大模型解析）
+   语音识别：讯飞 WebAPI（国内直连，免费额度足够个人使用）
+   指令解析：DeepSeek（按量计费，1 元可用数月）
    ============================================================ */
 const VOICE_CONFIG = {
   baseURL: "https://api.deepseek.com/chat/completions",
   model: "deepseek-chat",
-  keyStoreKey: "cat-press-llm-key",   // API Key 在 localStorage 里的键名
-  moduleKey: "checkin",               // 本期只接猫咪日常；未来扩展改这里+动作表
+  keyStoreKey: "cat-press-llm-key",    // DeepSeek Key 在 localStorage 里的键名
+  asrStoreKey: "cat-press-asr-cred",   // 讯飞三件套（JSON）在 localStorage 里的键名
+  asrHost: "iat-api.xfyun.cn",
+  asrPath: "/v2/iat",
+  moduleKey: "checkin",                // 本期只接猫咪日常；未来扩展改这里+动作表
 };
 
 /* ============================================================
@@ -1351,7 +1355,7 @@ render();
 
 /* ============================================================
    VOICE — 语音打卡助手（新增代码块，独立闭环）
-   链路：麦克风按钮 → 语音识别 → parseCommand(在下方定义) → execCommand(在下方定义)
+   链路：麦克风按钮 → 讯飞 ASR（WebSocket 流式识别）→ parseCommand(DeepSeek) → execCommand
    ============================================================ */
 function vtoast(msg, ms=2600){
   const el=document.createElement("div"); el.className="vtoast"; el.textContent=msg;
@@ -1360,55 +1364,195 @@ function vtoast(msg, ms=2600){
   setTimeout(()=>{ el.classList.remove("show"); setTimeout(()=>el.remove(),300); }, ms);
 }
 
-/* ---------- API Key 管理（localStorage，仅发往 provider 官方接口） ---------- */
+/* ---------- 语音服务凭证管理（讯飞 ASR 三件套 + DeepSeek Key，仅存本机浏览器） ---------- */
 function vkey(){ return localStorage.getItem(VOICE_CONFIG.keyStoreKey)||""; }
-function ensureKey(){ if(vkey()) return true; openKeyDialog(); return false; }
+function vcred(){ try{ return JSON.parse(localStorage.getItem(VOICE_CONFIG.asrStoreKey))||null; }catch(e){ return null; } }
+function vcredOK(){ const c=vcred(); return !!(c&&c.appid&&c.apiKey&&c.apiSecret); }
+function ensureKey(){ if(vcredOK()&&vkey()) return true; openKeyDialog(); return false; }
 function openKeyDialog(){
   if(document.querySelector(".overlay")) return;   // 防重入：已有弹窗时不再叠加
+  const c=vcred()||{};
+  const sty='width:100%;padding:10px 12px;border:1px solid var(--border-input);border-radius:var(--radius-tile);background:var(--surface-nested);color:var(--text);font-size:14px;margin-bottom:10px';
   const overlay=document.createElement("div"); overlay.className="overlay";
-  overlay.innerHTML=`<div class="modal" style="width:420px"><h3>设置大模型 Key</h3>
-    <div class="sub">语音指令由 DeepSeek 解析。Key 只存在本机浏览器，仅发往官方接口。<br>没有 Key？到 platform.deepseek.com 注册，充值 1 元可用数月。</div>
-    <input id="vk-input" type="password" placeholder="sk-..." autocomplete="off"
-      style="width:100%;padding:10px 12px;border:1px solid var(--border-input);border-radius:var(--radius-tile);background:var(--surface-nested);color:var(--text);font-size:14px"/>
+  overlay.innerHTML=`<div class="modal" style="width:440px"><h3>语音服务设置</h3>
+    <div class="sub">语音识别走讯飞 WebAPI（国内直连，免费额度每日 500 次），指令解析走 DeepSeek。凭证只存在本机浏览器，仅发往各自官方接口。</div>
+    <div class="sub" style="margin:10px 0 6px">① 讯飞三件套：<b>console.xfyun.cn</b> 创建应用 → 开通「语音听写（流式版）」→ 复制 WebAPI 凭证</div>
+    <input id="vs-appid" placeholder="APPID" autocomplete="off" value="${attr(c.appid||"")}" style="${sty}"/>
+    <input id="vs-apikey" type="password" placeholder="APIKey" autocomplete="off" value="${attr(c.apiKey||"")}" style="${sty}"/>
+    <input id="vs-secret" type="password" placeholder="APISecret" autocomplete="off" value="${attr(c.apiSecret||"")}" style="${sty}"/>
+    <div class="sub" style="margin:4px 0 6px">② DeepSeek Key：<b>platform.deepseek.com</b> 注册，充值 1 元可用数月</div>
+    <input id="vs-llmkey" type="password" placeholder="sk-..." autocomplete="off" value="${attr(vkey())}" style="${sty}"/>
     <div class="modal-actions"><div class="spacer"></div>
-      <button class="btn ghost" id="vk-cancel">取消</button><button class="btn" id="vk-save">保存</button></div></div>`;
+      <button class="btn ghost" id="vs-cancel">取消</button><button class="btn" id="vs-save">保存</button></div></div>`;
   document.body.appendChild(overlay);
   const close=()=>overlay.remove();
   const bornAt=Date.now();
   overlay.onclick=e=>{ if(e.target===overlay && Date.now()-bornAt>350) close(); };
-  overlay.querySelector("#vk-cancel").onclick=close;
-  overlay.querySelector("#vk-save").onclick=()=>{
-    const k=overlay.querySelector("#vk-input").value.trim();
-    if(!k){ vtoast("Key 不能为空"); return; }
-    localStorage.setItem(VOICE_CONFIG.keyStoreKey,k); close(); vtoast("Key 已保存，点麦克风开始说话");
+  overlay.querySelector("#vs-cancel").onclick=close;
+  overlay.querySelector("#vs-save").onclick=()=>{
+    const appid=overlay.querySelector("#vs-appid").value.trim();
+    const apiKey=overlay.querySelector("#vs-apikey").value.trim();
+    const apiSecret=overlay.querySelector("#vs-secret").value.trim();
+    const llmKey=overlay.querySelector("#vs-llmkey").value.trim();
+    if(!appid||!apiKey||!apiSecret){ vtoast("请填完整讯飞三件套"); return; }
+    if(!llmKey){ vtoast("请填写 DeepSeek Key"); return; }
+    localStorage.setItem(VOICE_CONFIG.asrStoreKey,JSON.stringify({appid,apiKey,apiSecret}));
+    localStorage.setItem(VOICE_CONFIG.keyStoreKey,llmKey);
+    close(); vtoast("凭证已保存，点麦克风开始说话");
   };
 }
 
-/* ---------- 语音识别（Chrome / Edge 免费内置） ---------- */
-let vrecog=null, vlistening=false, vstarting=false;
-function vlisten(){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){ vtoast("当前浏览器不支持语音识别，请用 Chrome / Edge"); return; }
-  if(vstarting) return;                        // 启动中：忽略重复点击，防多实例并行
-  if(vlistening){ vrecog&&vrecog.stop(); return; }
-  vrecog=new SR(); vrecog.lang="zh-CN"; vrecog.interimResults=false; vrecog.maxAlternatives=1;
-  const btn=document.querySelector("#vmic");
-  vrecog.onstart=()=>{ vstarting=false; vlistening=true; btn.classList.add("on"); };
-  vrecog.onend=()=>{ vstarting=false; vlistening=false; btn.classList.remove("on"); };
-  vrecog.onerror=e=>{ vstarting=false; vlistening=false; btn.classList.remove("on");
-    if(e.error==="not-allowed") vtoast("麦克风权限被拒：点地址栏左侧锁形图标 → 麦克风 → 允许，然后刷新页面",4200);
-    else if(e.error==="no-speech") vtoast("没听清，请再说一次");
-    else if(e.error==="audio-capture") vtoast("读不到麦克风：请用 localhost 网址（勿双击文件）打开，并检查系统麦克风权限与设备占用",4200);
-    else if(e.error!=="aborted") vtoast("语音识别出错："+e.error); };
-  vrecog.onresult=async ev=>{
-    const text=ev.results[0][0].transcript.trim(); if(!text) return;
-    vtoast(`听到：「${text}」`,1800);
-    try{ execCommand(await parseCommand(text)); }
+/* ---------- 语音录制 + 讯飞流式识别（WebSocket，PCM 16k 单声道） ---------- */
+let vBusy=false, vDone=false, vRec=false;
+let vStream=null, vAC=null, vProc=null, vSrc=null, vWS=null;
+let vPcm=[], vSent=0, vText="", vTimer=null, vGuard=null;
+
+function vCleanup(){
+  if(vTimer){ clearInterval(vTimer); vTimer=null; }
+  if(vGuard){ clearTimeout(vGuard); vGuard=null; }
+  if(vProc){ try{ vProc.disconnect(); }catch(e){} vProc=null; }
+  if(vSrc){ try{ vSrc.disconnect(); }catch(e){} vSrc=null; }
+  if(vAC){ try{ vAC.close(); }catch(e){} vAC=null; }
+  if(vStream){ vStream.getTracks().forEach(t=>t.stop()); vStream=null; }
+  if(vWS){ try{ vWS.close(); }catch(e){} vWS=null; }
+  vPcm=[]; vRec=false;
+  const b=document.querySelector("#vmic"); if(b) b.classList.remove("on");
+}
+
+/* 鉴权：RFC1123 日期 + HMAC-SHA256 签名（Web Crypto，localhost 可用） */
+function vb64(u8){ let s=""; for(let i=0;i<u8.length;i++) s+=String.fromCharCode(u8[i]); return btoa(s); }
+async function vHmac(secret,data){
+  const k=await crypto.subtle.importKey("raw",new TextEncoder().encode(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
+  return vb64(new Uint8Array(await crypto.subtle.sign("HMAC",k,new TextEncoder().encode(data))));
+}
+async function vAsrURL(){
+  const c=vcred();
+  const date=new Date().toUTCString();
+  const sig=await vHmac(c.apiSecret,`host: ${VOICE_CONFIG.asrHost}\ndate: ${date}\nGET ${VOICE_CONFIG.asrPath} HTTP/1.1`);
+  const auth=btoa(`api_key="${c.apiKey}", algorithm="hmac-sha256", headers="host date request-line", signature="${sig}"`);
+  return `wss://${VOICE_CONFIG.asrHost}${VOICE_CONFIG.asrPath}?authorization=${encodeURIComponent(auth)}&date=${encodeURIComponent(date)}&host=${VOICE_CONFIG.asrHost}`;
+}
+
+/* 音频工具：重采样到 16k → Int16 PCM */
+function vResample(buf,rate){
+  if(rate===16000) return buf;
+  const ratio=rate/16000, out=new Float32Array(Math.floor(buf.length/ratio));
+  for(let i=0;i<out.length;i++){ const p=i*ratio,j=p|0,f=p-j; out[i]=buf[j]*(1-f)+(buf[j+1]??buf[j])*f; }
+  return out;
+}
+function vToI16(f32){
+  const o=new Int16Array(f32.length);
+  for(let i=0;i<f32.length;i++){ const s=Math.max(-1,Math.min(1,f32[i])); o[i]=s<0?s*32768:s*32767; }
+  return o;
+}
+
+/* 帧发送：首帧带业务参数，1280B/帧、40ms 节奏（讯飞官方建议） */
+function vSendFrame(status,b64){
+  if(!vWS||vWS.readyState!==1) return;
+  const data={status,format:"audio/L16;rate=16000",encoding:"raw",audio:b64};
+  if(status===0){
+    const c=vcred(); if(!c) return;
+    vWS.send(JSON.stringify({ common:{app_id:c.appid},
+      business:{language:"zh_cn",domain:"iat",accent:"mandarin",vad_eos:2000}, data }));
+  }else vWS.send(JSON.stringify({data}));
+}
+function vFlatten(){
+  let total=0; for(const a of vPcm) total+=a.length;
+  const all=new Int16Array(total); let off=0;
+  for(const a of vPcm){ all.set(a,off); off+=a.length; }
+  return all;
+}
+function vSendTick(){
+  const all=vFlatten();
+  const bytes=new Uint8Array(all.buffer,0,all.length*2);
+  let pos=0,n=0;
+  while(bytes.length-pos>=1280 && n<3){            // 每 tick 最多追 3 帧，防爆冲
+    vSendFrame(vSent===0?0:1, vb64(bytes.slice(pos,pos+1280)));
+    vSent++; pos+=1280; n++;
+  }
+  vPcm=[ all.slice(pos/2) ];                        // 剩余留到下 tick
+}
+function vSendEnd(){
+  const all=vFlatten();
+  if(all.length){ vSendFrame(vSent===0?0:1, vb64(new Uint8Array(all.buffer))); vSent++; }
+  if(vSent===0) vSendFrame(0,"");                   // 没采到声音也要补首帧
+  vSendFrame(2,"");                                 // 结束帧
+  vPcm=[];
+}
+
+/* 结果处理 */
+function vProcess(text){
+  vtoast(`听到：「${text}」`,1800);
+  (async()=>{ try{ execCommand(await parseCommand(text)); }
     catch(err){ vtoast("网络或 Key 有问题："+err.message,3600); }
+    finally{ vBusy=false; } })();
+}
+function vFinish(){
+  if(vDone) return; vDone=true;
+  const text=vText.trim();
+  vCleanup();
+  if(!text){ vBusy=false; vtoast("没听清，请再说一次"); return; }
+  vProcess(text);
+}
+function vFail(msg){
+  vDone=true; vCleanup(); vBusy=false; vtoast(msg,4200);
+}
+
+/* 主流程：点击开始录音上送；再点一次（或 2 秒静默 / 20 秒上限）结束 */
+async function vlisten(){
+  if(vBusy) return;
+  if(!window.isSecureContext){ vtoast("请用 http://localhost 打开页面（file:// 无法使用麦克风）",4200); return; }
+  vBusy=true; vDone=false; vText=""; vSent=0; vPcm=[];
+  try{
+    vStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
+  }catch(e){
+    vBusy=false;
+    vtoast(e.name==="NotAllowedError" ? "麦克风权限被拒：点地址栏左侧锁形图标 → 允许，然后刷新页面"
+      : e.name==="NotFoundError" ? "找不到可用麦克风设备"
+      : "读不到麦克风：检查设备是否被其他应用占用",4200);
+    return;
+  }
+  try{
+    vWS=new WebSocket(await vAsrURL());
+    await new Promise((res,rej)=>{
+      const to=setTimeout(()=>rej(new Error("timeout")),6000);
+      vWS.onopen=()=>{ clearTimeout(to); res(); };
+      vWS.onerror=()=>{ clearTimeout(to); rej(new Error("ws")); };
+    });
+  }catch(e){ vFail("连不上讯飞识别服务，请检查网络或稍后重试"); return; }
+  vWS.onmessage=ev=>{
+    let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+    if(m.code!==0){ vFail(`讯飞识别失败（${m.code}）：${m.message||"请核对三件套与应用开通状态"}`); return; }
+    if(m.data&&m.data.result) vText+=m.data.result.ws.map(w=>w.cw.map(c=>c.w).join("")).join("");
+    if(m.data&&m.data.status===2) vFinish();
   };
-  vstarting=true;
-  try{ vrecog.start(); }
-  catch(e){ vstarting=false; vrecog=null; vtoast("麦克风启动失败，请重试"); }
+  vWS.onclose=()=>{ if(vBusy&&!vDone) vFinish(); };     // 异常断开时用已收到的文本收尾
+  const AC=window.AudioContext||window.webkitAudioContext;
+  vAC=new AC();
+  vSrc=vAC.createMediaStreamSource(vStream);
+  vProc=vAC.createScriptProcessor(4096,1,1);
+  vProc.onaudioprocess=e=>{
+    if(!vRec) return;
+    vPcm.push(vToI16(vResample(e.inputBuffer.getChannelData(0),vAC.sampleRate)));
+  };
+  vSrc.connect(vProc); vProc.connect(vAC.destination);
+  vRec=true;
+  vTimer=setInterval(vSendTick,40);
+  vGuard=setTimeout(vStopRec,20000);                    // 20 秒强制结束
+  const b=document.querySelector("#vmic"); if(b) b.classList.add("on");
+  vtoast("请说话：2 秒静默自动结束，或再点一次麦克风结束",3200);
+}
+function vStopRec(){                                     // 手动/超时结束采集，等最终识别结果
+  if(!vRec) return;
+  vRec=false;
+  if(vTimer){ clearInterval(vTimer); vTimer=null; }
+  if(vGuard){ clearTimeout(vGuard); vGuard=null; }
+  if(vProc){ try{ vProc.disconnect(); }catch(e){} vProc=null; }
+  if(vSrc){ try{ vSrc.disconnect(); }catch(e){} vSrc=null; }
+  if(vStream){ vStream.getTracks().forEach(t=>t.stop()); vStream=null; }
+  const b=document.querySelector("#vmic"); if(b) b.classList.remove("on");
+  vSendEnd();
+  vGuard=setTimeout(()=>{ if(vBusy&&!vDone) vFinish(); },5000);  // 服务端 5 秒未回最终帧则本地收尾
 }
 
 /* ---------- LLM 指令解析（DeepSeek，JSON 输出） ---------- */
@@ -1480,7 +1624,11 @@ function vlistItems(){
   const b=document.createElement("button");
   b.id="vmic"; b.className="vmic"; b.title="语音打卡（猫咪日常）";
   b.innerHTML=icon("mic",24);
-  b.onclick=()=>{ if(ensureKey()) vlisten(); };
+  b.onclick=()=>{
+    if(vRec){ vStopRec(); return; }        // 录音中：点击 = 结束
+    if(vBusy) return;                      // 连接/识别中：忽略
+    if(ensureKey()) vlisten();
+  };
   document.body.appendChild(b);
 })();
 </script>
