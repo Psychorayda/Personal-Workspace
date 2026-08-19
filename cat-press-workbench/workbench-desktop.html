@@ -1405,7 +1405,7 @@ function openKeyDialog(){
 /* ---------- 语音录制 + 讯飞流式识别（WebSocket，PCM 16k 单声道） ---------- */
 let vBusy=false, vDone=false, vRec=false;
 let vStream=null, vAC=null, vProc=null, vSrc=null, vWS=null;
-let vPcm=[], vSent=0, vText="", vTimer=null, vGuard=null;
+let vPcm=[], vSent=0, vCap=0, vText="", vTimer=null, vGuard=null;
 
 function vCleanup(){
   if(vTimer){ clearInterval(vTimer); vTimer=null; }
@@ -1490,8 +1490,14 @@ function vProcess(text){
 function vFinish(){
   if(vDone) return; vDone=true;
   const text=vText.trim();
+  console.debug("[voice] finish: frames sent =",vSent,", samples captured =",vCap,", text =",text||"（空）");
   vCleanup();
-  if(!text){ vBusy=false; vtoast("没听清，请再说一次"); return; }
+  if(!text){
+    vBusy=false;
+    if(vCap<1600) vtoast("没采集到声音：请确认麦克风没静音、Edge 里选对了输入设备",4200);
+    else vtoast("没听清，请再说一次",3600);
+    return;
+  }
   vProcess(text);
 }
 function vFail(msg){
@@ -1502,7 +1508,7 @@ function vFail(msg){
 async function vlisten(){
   if(vBusy) return;
   if(!window.isSecureContext){ vtoast("请用 http://localhost 打开页面（file:// 无法使用麦克风）",4200); return; }
-  vBusy=true; vDone=false; vText=""; vSent=0; vPcm=[];
+  vBusy=true; vDone=false; vText=""; vSent=0; vCap=0; vPcm=[];
   try{
     vStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
   }catch(e){
@@ -1522,6 +1528,7 @@ async function vlisten(){
   }catch(e){ vFail("连不上讯飞识别服务，请检查网络或稍后重试"); return; }
   vWS.onmessage=ev=>{
     let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+    console.debug("[voice] recv:",ev.data.slice(0,200));
     if(m.code!==0){ vFail(`讯飞识别失败（${m.code}）：${m.message||"请核对三件套与应用开通状态"}`); return; }
     if(m.data&&m.data.result) vText+=m.data.result.ws.map(w=>w.cw.map(c=>c.w).join("")).join("");
     if(m.data&&m.data.status===2) vFinish();
@@ -1529,11 +1536,15 @@ async function vlisten(){
   vWS.onclose=()=>{ if(vBusy&&!vDone) vFinish(); };     // 异常断开时用已收到的文本收尾
   const AC=window.AudioContext||window.webkitAudioContext;
   vAC=new AC();
+  if(vAC.state==="suspended"){ try{ await vAC.resume(); }catch(e){} }   // 防自动播放策略挂起导致采集不到声音
+  console.debug("[voice] AudioContext state:",vAC.state,"rate:",vAC.sampleRate);
   vSrc=vAC.createMediaStreamSource(vStream);
   vProc=vAC.createScriptProcessor(4096,1,1);
   vProc.onaudioprocess=e=>{
     if(!vRec) return;
-    vPcm.push(vToI16(vResample(e.inputBuffer.getChannelData(0),vAC.sampleRate)));
+    const pcm=vToI16(vResample(e.inputBuffer.getChannelData(0),vAC.sampleRate));
+    vCap+=pcm.length;
+    vPcm.push(pcm);
   };
   vSrc.connect(vProc); vProc.connect(vAC.destination);
   vRec=true;
